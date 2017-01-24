@@ -34,7 +34,7 @@ from torchvision import datasets, transforms
 
 # The sequence of sizes of blocks within each group from Wide Resnet paper
 # I'll clean this up / incorporate k and base_seq as parameters
-k = 4
+k = 1
 
 base_seq = [16, 32, 64]
 
@@ -42,7 +42,13 @@ size_seq = [k * s for s in base_seq]
 
 
 class Block(nn.Module):
-    ''' The block type defined in wide resnet paper
+    ''' The block type with sequence of (conv, relu, batchnorm, dropout) operations as defined in wide resnet paper
+
+    Can be:
+        feedforward, x_t = f(x_{t-1})
+        residual, x_t = f(x_{t-1}) + x_{t-1}
+        stochastic-depth, x_t = f(x_{t-1}) + x_{t-1} with probability alpha
+                              = x_{t-1} with probability 1-alpha
     '''
     def __init__(self, in_size, out_size, residual=False, stochastic=False, keep_prob=0.8):
         super(Block, self).__init__()
@@ -59,8 +65,7 @@ class Block(nn.Module):
         self.stochastic = stochastic
         self.keep_prob = keep_prob
 
-    def forward(self, x):
-
+    def maybe_expand(self, x):
         # replicate x a number of times if the output # filters is a multiple of input # filters
         # don't know if this is actually the correct way to do it
         assert self.out_size >= self.in_size, "No defined behavior for in_size > out_size"
@@ -71,9 +76,13 @@ class Block(nn.Module):
                 tuple([x for _ in range(self.out_size / self.in_size)]),
                 1)
 
+        return x
+
+    def forward(self, x):
+
         # drop the whole layer
         if self.stochastic and self.training and (np.random.random() < self.keep_prob):
-            return x
+            return self.maybe_expand(x)
 
         # compute the transformation of input defined by the layer
 
@@ -89,11 +98,11 @@ class Block(nn.Module):
 
         # if stochastic and not training, treat it as a weighted residual connection
         if self.stochastic and not self.training:
-            return x + self.keep_prob * inner_result
+            return self.maybe_expand(x) + self.keep_prob * inner_result
 
         # vanilla residual connection
         elif self.stochastic or self.residual:
-            return x + inner_result
+            return self.maybe_expand(x) + inner_result
 
         # vanilla network (not resnet or stochastic)
         else:
@@ -129,8 +138,8 @@ class Net(nn.Module):
 
                 # HACK: apparently pytorch requires that each sub-module be an attribute of the top-level module
                 # for backpropogation to work properly
-                # so after creating the block, as WELL as adding it to the "blocks" list attribute, we also
-                # add that block to a uniquely named attribute of the Net module
+                # so after creating the block, as WELL as appending it to the "blocks" list, we also
+                # set that block to be a uniquely named attribute of the Net module
                 attr_name = "block_" + str(idx)
                 setattr(self, attr_name, new_block)
                 self.blocks.append(new_block)
@@ -158,11 +167,11 @@ class Net(nn.Module):
 
             # Downsample after the first two groups
             if j < 2:
-                x = F.relu(F.max_pool2d(x, 2))
+                x = F.relu(F.avg_pool2d(x, 2))
 
         # Final pooling, fc layer and softmax output
         x = F.relu(x)
-        x = t.squeeze(F.avg_pool2d(x, 8))
+        x = t.squeeze(F.avg_pool2d(x, x.size()[3]))
         x = F.relu(self.fc(x))
         return F.log_softmax(x)
 

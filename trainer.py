@@ -35,12 +35,16 @@ parser.add_argument('--test-batch-size', type=int, default=1000, metavar='N',
                     help='input batch size for testremote_projects/torch_adaptive_stochastic_depthing (default: 1000)')
 parser.add_argument('--epochs', type=int, default=10, metavar='N',
                     help='number of epochs to train (default: 2)')
-parser.add_argument('--lr', type=float, default=0.01, metavar='LR',
-                    help='learning rate (default: 0.01)')
+parser.add_argument('--lr', type=float, default=0.1, metavar='LR',
+                    help='learning rate (default: 0.1)')
 parser.add_argument('--momentum', type=float, default=0.5, metavar='M',
                     help='SGD momentum (default: 0.9)')
 parser.add_argument('--weight_decay', type=float, default=0.0001, metavar='WD',
                     help='weight decay (default: 0.0001')
+parser.add_argument('--lr_decay_factor', type=float, default=0.95, metavar='LRDF',
+                    help='learning rate decay factor (default: 0.95)')
+parser.add_argument('--num_epochs_to_decay', type=int, default=1, metavar='NETD',
+                    help='number of epochs before applying lr decay (default: 1)')
 parser.add_argument('--no-cuda', action='store_true', default=False,
                     help='enables CUDA training')
 parser.add_argument('--seed', type=int, default=1, metavar='S',
@@ -145,7 +149,7 @@ for epoch in range(1, args.epochs + 1):
     lr = args.lr
     train(epoch)
     test(epoch)
-    if (epoch > 0) and (epoch % 50 == 0):
-        lr = lr * 0.2
+    if (epoch > 0) and (epoch % args.num_epochs_to_decay == 0):
+        lr = lr * args.lr_decay_factor
         optimizer = optim.SGD(model.parameters(), lr=lr, momentum=args.momentum, weight_decay=args.weight_decay)
 

@@ -113,10 +113,11 @@ class Net(nn.Module):
     '''
     def __init__(self, num_blocks=2, input_dim=1, size_sequence=size_seq, residual=False, stochastic=False):
         super(Net, self).__init__()
-        self.num_blocks = num_blocks - 1
 
+        # We start by mapping to 16 feature maps
         current_size = 16
 
+        # Initial convolution layer
         self.conv1 = nn.Conv2d(input_dim, current_size, kernel_size=3, padding=1)
 
         self.blocks = []

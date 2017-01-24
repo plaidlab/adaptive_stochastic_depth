@@ -76,12 +76,14 @@ class Block(nn.Module):
         # conv2 result
         inner_result = self.conv2(F.relu(self.bn2(inner_result)))
 
-        # augment x with zeros if there are more output filters/feature maps than input filters / feature maps
-        # we should maybe just replicate x instead
+        # replicate x a number of times if the output # filters is a multiple of input # filters
+        # don't know if this is actually the correct way to do it
+        assert self.out_size >= self.in_size, "No defined behavior for in_size > out_size"
+
         if self.out_size > self.in_size:
-            extra_zeros = Variable(t.zeros(x.size()[0], self.out_size - self.in_size, x.size()[2], x.size()[3])).cuda()
+            assert self.out_size % self.in_size == 0, "Out size must be a multiple of in size to replicate x"
             x = t.cat(
-                (x, extra_zeros),
+                tuple([x for _ in range(self.out_size / self.in_size)]),
                 1)
 
         # if stochastic and not training, treat it as a weighted residual connection

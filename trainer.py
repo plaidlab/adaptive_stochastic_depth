@@ -1,3 +1,10 @@
+'''
+Trains the network.
+
+Mostly taken from PyTorch MNIST example at https://github.com/pytorch/examples/tree/master/mnist
+
+'''
+
 from __future__ import print_function
 import argparse
 import torch
@@ -11,7 +18,7 @@ import models
 
 
 # Training settings
-parser = argparse.ArgumentParser(description='PyTorch MNIST Example')
+parser = argparse.ArgumentParser(description='Adaptive Stochastic Depth trainer')
 parser.add_argument('--batch-size', type=int, default=64, metavar='N',
                     help='input batch size for training (default: 64)')
 parser.add_argument('--num_blocks', type=int, default=64, metavar='B',

@@ -3,6 +3,8 @@ Trains the network.
 
 Mostly taken from PyTorch MNIST example at https://github.com/pytorch/examples/tree/master/mnist
 
+Example usage:
+python trainer.py --dataset=cifar10 --num_blocks=12 --epochs=100 --model=resnet --momentum=0.9
 '''
 
 from __future__ import print_function

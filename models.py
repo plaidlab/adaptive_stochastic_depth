@@ -27,10 +27,13 @@ import torch as t
 import numpy as np
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.autograd import Variable
 import torch.optim as optim
 from torchvision import datasets, transforms
-from torch.autograd import Variable
 
+
+# The sequence of sizes of blocks within each group from Wide Resnet paper
+# I'll clean this up / incorporate k and base_seq as parameters
 k = 4
 
 base_seq = [16, 32, 64]
@@ -74,8 +77,12 @@ class Block(nn.Module):
         inner_result = self.conv2(F.relu(self.bn2(inner_result)))
 
         # augment x with zeros if there are more output filters/feature maps than input filters / feature maps
+        # we should maybe just replicate x instead
         if self.out_size > self.in_size:
-            x = t.cat((x, t.zeros(x.size()[0], self.out_size - self.in_size, x.size()[2], x.size()[3])), 1)
+            extra_zeros = Variable(t.zeros(x.size()[0], self.out_size - self.in_size, x.size()[2], x.size()[3])).cuda()
+            x = t.cat(
+                (x, extra_zeros),
+                1)
 
         # if stochastic and not training, treat it as a weighted residual connection
         if self.stochastic and not self.training:

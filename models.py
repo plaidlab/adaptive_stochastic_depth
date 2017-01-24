@@ -61,30 +61,31 @@ class Block(nn.Module):
 
     def forward(self, x):
 
+        # replicate x a number of times if the output # filters is a multiple of input # filters
+        # don't know if this is actually the correct way to do it
+        assert self.out_size >= self.in_size, "No defined behavior for in_size > out_size"
+
+        if self.out_size > self.in_size:
+            assert self.out_size % self.in_size == 0, "Out_size must be a multiple of in_size to replicate x"
+            x = t.cat(
+                tuple([x for _ in range(self.out_size / self.in_size)]),
+                1)
+
         # drop the whole layer
         if self.stochastic and self.training and (np.random.random() < self.keep_prob):
             return x
 
+        # compute the transformation of input defined by the layer
+
         # conv1 result
         inner_result = F.relu(self.bn1(x))
         inner_result = self.conv1(inner_result)
-
 
         # dropout on conv1 result
         inner_result = self.drop(inner_result)
 
         # conv2 result
         inner_result = self.conv2(F.relu(self.bn2(inner_result)))
-
-        # replicate x a number of times if the output # filters is a multiple of input # filters
-        # don't know if this is actually the correct way to do it
-        assert self.out_size >= self.in_size, "No defined behavior for in_size > out_size"
-
-        if self.out_size > self.in_size:
-            assert self.out_size % self.in_size == 0, "Out size must be a multiple of in size to replicate x"
-            x = t.cat(
-                tuple([x for _ in range(self.out_size / self.in_size)]),
-                1)
 
         # if stochastic and not training, treat it as a weighted residual connection
         if self.stochastic and not self.training:
@@ -96,7 +97,7 @@ class Block(nn.Module):
 
         # vanilla network (not resnet or stochastic)
         else:
-            return x
+            return inner_result
 
 class Net(nn.Module):
     ''' A generic class for networks composed of Blocks

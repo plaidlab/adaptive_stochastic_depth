@@ -39,6 +39,10 @@ parser.add_argument('--lr', type=float, default=0.1, metavar='LR',
                     help='learning rate (default: 0.1)')
 parser.add_argument('--momentum', type=float, default=0.5, metavar='M',
                     help='SGD momentum (default: 0.9)')
+parser.add_argument('--hyper_lr', type=float, default=0.1, metavar='HLR',
+                    help='hyperparam learning rate (default: 0.1)')
+parser.add_argument('--hyper_momentum', type=float, default=0.1, metavar='HM',
+                    help='hyperparam SGD momentum (default: 0.1)')
 parser.add_argument('--weight_decay', type=float, default=0.0001, metavar='WD',
                     help='weight decay (default: 0.0001')
 parser.add_argument('--lr_decay_factor', type=float, default=0.95, metavar='LRDF',
@@ -47,6 +51,10 @@ parser.add_argument('--num_epochs_to_decay', type=int, default=1, metavar='NETD'
                     help='number of epochs before applying lr decay (default: 1)')
 parser.add_argument('--no-cuda', action='store_true', default=False,
                     help='enables CUDA training')
+parser.add_argument('--custom_lr_decay', action='store_true', default=False,
+                    help='use custom LR decay scheme')
+parser.add_argument('--hyper_train', action='store_true', default=False,
+                    help='do a hyper train step on the hyperparameters')
 parser.add_argument('--seed', type=int, default=1, metavar='S',
                     help='random seed (default: 1)')
 parser.add_argument('--log-interval', type=int, default=10, metavar='N',
@@ -94,13 +102,18 @@ test_loader = torch.utils.data.DataLoader(
 
 input_dim = 1 if args.dataset=='mnist' else 3
 
+# HACK: we need to split into train / dev / test
+# but I'm lazy for now so use train as dev
+# horrific overfitting will result
+dev_loader = train_loader
+
 
 if args.model == 'net':
     model = models.Net(input_dim=input_dim, num_blocks=args.num_blocks)
 elif args.model == 'resnet':
     model = models.ResNet(input_dim=input_dim, num_blocks=args.num_blocks)
 elif args.model == 'stochasticresnet':
-    model = models.StochasticResNetResNet(input_dim=input_dim, num_blocks=args.num_blocks)
+    model = models.StochasticResNet(input_dim=input_dim, num_blocks=args.num_blocks)
 else:
     raise Exception('Incorrect model name.')
 
@@ -108,6 +121,8 @@ if args.cuda:
     model.cuda()
 
 optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
+
+hyper_optimizer = optim.SGD(model.trainable_hyperparams, lr=args.hyper_lr, momentum=args.hyper_momentum)
 
 def train(epoch):
     model.train()
@@ -124,6 +139,25 @@ def train(epoch):
             print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
                 epoch, batch_idx * len(data), len(train_loader.dataset),
                 100. * batch_idx / len(train_loader), loss.data[0]))
+
+def hyper_train(epoch):
+    model.eval()
+    for batch_idx, (data, target) in enumerate(dev_loader):
+        if args.cuda:
+            data, target = data.cuda(), target.cuda()
+        data, target = Variable(data), Variable(target)
+        hyper_optimizer.zero_grad()
+        output = model(data)
+        loss = F.nll_loss(output, target)
+        loss.backward()
+        hyper_optimizer.step()
+        if batch_idx % args.log_interval == 0:
+            print('HyperTrain Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
+                epoch, batch_idx * len(data), len(dev_loader.dataset),
+                100. * batch_idx / len(train_loader), loss.data[0]))
+
+    print("Layer weights / keep_probs are: ")
+    print(model.trainable_hyperparams)
 
 def test(epoch):
     model.eval()
@@ -147,9 +181,20 @@ def test(epoch):
 
 for epoch in range(1, args.epochs + 1):
     lr = args.lr
-    train(epoch)
-    test(epoch)
-    if (epoch > 0) and (epoch % args.num_epochs_to_decay == 0):
-        lr = lr * args.lr_decay_factor
-        optimizer = optim.SGD(model.parameters(), lr=lr, momentum=args.momentum, weight_decay=args.weight_decay)
 
+    train(epoch)
+
+    if args.hyper_train:
+        hyper_train(epoch)
+
+    test(epoch)
+
+    if args.custom_lr_decay:
+        if (epoch > 0) and (epoch % args.num_epochs_to_decay == 0):
+            lr = lr * args.lr_decay_factor
+            optimizer = optim.SGD(model.parameters(), lr=lr, momentum=args.momentum, weight_decay=args.weight_decay)
+
+    else:
+        if epoch == 250 or epoch == 375:
+            lr *= 0.1
+            optimizer = optim.SGD(model.parameters(), lr=lr, momentum=args.momentum, weight_decay=args.weight_decay)

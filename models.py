@@ -63,7 +63,11 @@ class Block(nn.Module):
         self.bn2 = nn.BatchNorm2d(out_size)
         self.residual = residual
         self.stochastic = stochastic
-        self.keep_prob = keep_prob
+
+        # Create a keep_prob hyperparameter for adapting the stochastic prob
+        # This is not an instance of torch.Parameter, so shouldn't be returned by net.Parameters()
+        # and should not be optimized in the train step
+        self.keep_prob = Variable(t.FloatTensor([keep_prob]), requires_grad=True)
 
     def maybe_expand(self, x):
         # replicate x a number of times if the output # filters is a multiple of input # filters
@@ -78,13 +82,14 @@ class Block(nn.Module):
 
         return x
 
-    def forward(self, x):
+    def transform(self, x):
+        ''' Computes the transformation of the input defined by the layer's params
+        (This is the f(x) part of the resnet eqn x_t+1 = f(x_t) + x_t)
 
-        # drop the whole layer
-        if self.stochastic and self.training and (np.random.random() < self.keep_prob):
-            return self.maybe_expand(x)
+        :param x: the input to the layer
+        :return: inner_result: the transformation of the input (conv, batch norm, relu etc) defined by layer
+        '''
 
-        # compute the transformation of input defined by the layer
 
         # conv1 result
         inner_result = F.relu(self.bn1(x))
@@ -96,9 +101,31 @@ class Block(nn.Module):
         # conv2 result
         inner_result = self.conv2(F.relu(self.bn2(inner_result)))
 
+        return inner_result
+
+
+    def forward(self, x):
+        ''' Compute the output of layer.
+        This fn handles residual / stochastic behavior. It calls transform() to do the actual ops (conv, relu etc).
+
+        :param x: the input to the current layer
+        :return: the input to the next layer
+        '''
+
+        # drop the whole layer
+        if self.stochastic and self.training and (np.random.random() < self.keep_prob):
+            return self.maybe_expand(x)
+
+        inner_result = self.transform(x)
+
         # if stochastic and not training, treat it as a weighted residual connection
         if self.stochastic and not self.training:
-            return self.maybe_expand(x) + self.keep_prob * inner_result
+            # this is ugly bc PyTorch doesn't support broadcasting yet
+            return self.maybe_expand(x) + t.mul(
+                inner_result,
+                # unsqueeze keep_prob to 4d and expand to size of inner_result before elementwise multiply
+                self.keep_prob.unsqueeze(1).unsqueeze(2).unsqueeze(3).expand_as(inner_result)
+            )
 
         # vanilla residual connection
         elif self.stochastic or self.residual:
@@ -114,6 +141,8 @@ class Net(nn.Module):
     def __init__(self, num_blocks=2, input_dim=1, size_sequence=size_seq, residual=False, stochastic=False):
         super(Net, self).__init__()
 
+        self.num_blocks = num_blocks
+
         # We start by mapping to 16 feature maps
         current_size = 16
 
@@ -121,6 +150,8 @@ class Net(nn.Module):
         self.conv1 = nn.Conv2d(input_dim, current_size, kernel_size=3, padding=1)
 
         self.blocks = []
+
+        self.trainable_hyperparams = []
 
         # Determines # blocks in each group (divide by 3, remainder allocated among earlier layers)
         divisible = int(np.floor(self.num_blocks / 3.0))
@@ -134,6 +165,8 @@ class Net(nn.Module):
             for i in range(divisible + (1 if j < remainder else 0)):
                 # create block
                 new_block = Block(in_size=current_size, out_size=size_sequence[j], residual=residual, stochastic=stochastic)
+
+                self.trainable_hyperparams.append(new_block.keep_prob)
                 # get size
                 current_size = size_sequence[j]
 
@@ -175,7 +208,6 @@ class Net(nn.Module):
         x = t.squeeze(F.avg_pool2d(x, x.size()[3]))
         x = F.relu(self.fc(x))
         return F.log_softmax(x)
-
 
 class ResNet(Net):
     '''Convenience class for ResNet: a Net with residual blocks

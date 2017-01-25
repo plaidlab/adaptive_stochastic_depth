@@ -50,7 +50,7 @@ class Block(nn.Module):
         stochastic-depth, x_t = f(x_{t-1}) + x_{t-1} with probability alpha
                               = x_{t-1} with probability 1-alpha
     '''
-    def __init__(self, in_size, out_size, residual=False, stochastic=False, keep_prob=0.8):
+    def __init__(self, in_size, out_size, residual=False, stochastic=False, keep_prob=None):
         super(Block, self).__init__()
         # number of input filters
         self.in_size = in_size
@@ -64,10 +64,24 @@ class Block(nn.Module):
         self.residual = residual
         self.stochastic = stochastic
 
+        # hacky way of init-ing keep prob to something random between .5 and 1.0 to break ties
+        if keep_prob is None:
+            keep_prob = 0.5 + np.random.random() * 0.5
+
         # Create a keep_prob hyperparameter for adapting the stochastic prob
         # This is not an instance of torch.Parameter, so shouldn't be returned by net.Parameters()
         # and should not be optimized in the train step
-        self.keep_prob = Variable(t.FloatTensor([keep_prob]), requires_grad=True)
+
+        # We first find the logit such that sigmoid(logit) = keep_prob so we can constrain to [0, 1]
+        logit = np.log(keep_prob/(1 - keep_prob))
+        self.keep_prob_logit = Variable(t.FloatTensor([logit]), requires_grad=True)
+
+    def cuda(self):
+        ''' We override the nn.Module cuda method to also cuda-ize our trainable hyperparameters
+        '''
+
+        self.keep_prob_logit = self.keep_prob_logit.cuda()
+        super(Block, self).cuda()
 
     def maybe_expand(self, x):
         # replicate x a number of times if the output # filters is a multiple of input # filters
@@ -113,18 +127,23 @@ class Block(nn.Module):
         '''
 
         # drop the whole layer
-        if self.stochastic and self.training and (np.random.random() < self.keep_prob):
+        if self.stochastic and \
+                self.training and \
+                (np.random.random() < t.sigmoid(self.keep_prob_logit.data.cpu()).numpy()[0]):
+            # above: we HAVE to get 'data' from the keep_prob Variable, put on CPU,
+            # convert to Numpy, and get the only element in array, before we can compare.
+            # WARNING: 1.0 < Var will return TRUE even if Var.data = 0.5
             return self.maybe_expand(x)
 
         inner_result = self.transform(x)
 
         # if stochastic and not training, treat it as a weighted residual connection
         if self.stochastic and not self.training:
-            # this is ugly bc PyTorch doesn't support broadcasting yet
+            # HACK: this is ugly bc PyTorch doesn't support broadcasting yet
             return self.maybe_expand(x) + t.mul(
                 inner_result,
                 # unsqueeze keep_prob to 4d and expand to size of inner_result before elementwise multiply
-                self.keep_prob.unsqueeze(1).unsqueeze(2).unsqueeze(3).expand_as(inner_result)
+                t.sigmoid(self.keep_prob_logit).unsqueeze(1).unsqueeze(2).unsqueeze(3).expand_as(inner_result)
             )
 
         # vanilla residual connection
@@ -166,7 +185,7 @@ class Net(nn.Module):
                 # create block
                 new_block = Block(in_size=current_size, out_size=size_sequence[j], residual=residual, stochastic=stochastic)
 
-                self.trainable_hyperparams.append(new_block.keep_prob)
+                self.trainable_hyperparams.append(new_block.keep_prob_logit)
                 # get size
                 current_size = size_sequence[j]
 
@@ -180,6 +199,15 @@ class Net(nn.Module):
                 idx += 1
 
         self.fc = nn.Linear(size_sequence[-1], 10)
+
+    def cuda(self):
+        ''' We override the nn.Module cuda method to also cuda-ize our trainable hyperparameters
+        '''
+
+        for block in self.blocks:
+            block.cuda()
+
+        super(Net, self).cuda()
 
     def forward(self, x):
 

@@ -15,6 +15,8 @@ import torch.nn.functional as F
 import torch.optim as optim
 from torchvision import datasets, transforms
 from torch.autograd import Variable
+import math
+
 
 import models
 
@@ -23,26 +25,26 @@ import models
 parser = argparse.ArgumentParser(description='Adaptive Stochastic Depth trainer')
 parser.add_argument('--batch-size', type=int, default=64, metavar='N',
                     help='input batch size for training (default: 64)')
-parser.add_argument('--num_blocks', type=int, default=64, metavar='B',
+parser.add_argument('--num_blocks', type=int, default=52, metavar='B',
                     help='number of residual blocks')
-parser.add_argument('--dataset', type=str, default='mnist', metavar='DS',
-                    help='which dataset to run on (default mnist)')
+parser.add_argument('--dataset', type=str, default='cifar', metavar='DS',
+                    help='which dataset to run on (default cifar)')
 parser.add_argument('--model', type=str, default='net', metavar='M',
                     help='which model to use (default "net", a basic convnet)')
 parser.add_argument('--overfit', action='store_true', default=False,
-                    help='fits on test set to prove optimization succeeds')
+                    help='fits on test set to check if optimization succeeds')
 parser.add_argument('--test-batch-size', type=int, default=1000, metavar='N',
-                    help='input batch size for testremote_projects/torch_adaptive_stochastic_depthing (default: 1000)')
-parser.add_argument('--epochs', type=int, default=10, metavar='N',
-                    help='number of epochs to train (default: 2)')
+                    help='input batch size for testing (default: 1000)')
+parser.add_argument('--epochs', type=int, default=50, metavar='N',
+                    help='number of epochs to train (default: 50)')
 parser.add_argument('--lr', type=float, default=0.1, metavar='LR',
                     help='learning rate (default: 0.1)')
 parser.add_argument('--momentum', type=float, default=0.5, metavar='M',
                     help='SGD momentum (default: 0.9)')
 parser.add_argument('--hyper_lr', type=float, default=0.1, metavar='HLR',
                     help='hyperparam learning rate (default: 0.1)')
-parser.add_argument('--hyper_momentum', type=float, default=0.1, metavar='HM',
-                    help='hyperparam SGD momentum (default: 0.1)')
+parser.add_argument('--clip', type=float, default=0.1, metavar='C',
+                    help='clip hyper-gradients to this value')
 parser.add_argument('--weight_decay', type=float, default=0.0001, metavar='WD',
                     help='weight decay (default: 0.0001')
 parser.add_argument('--lr_decay_factor', type=float, default=0.95, metavar='LRDF',
@@ -122,7 +124,14 @@ if args.cuda:
 
 optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
 
-hyper_optimizer = optim.SGD(model.trainable_hyperparams, lr=args.hyper_lr, momentum=args.hyper_momentum)
+def clip_gradient(parameters, clip):
+    """Computes a gradient clipping coefficient based on gradient norm."""
+    totalnorm = 0
+    for p in parameters:
+        modulenorm = p.grad.data.norm()
+        totalnorm += modulenorm ** 2
+    totalnorm = math.sqrt(totalnorm)
+    return min(1, clip / (totalnorm + 1e-6))
 
 def train(epoch):
     model.train()
@@ -146,18 +155,25 @@ def hyper_train(epoch):
         if args.cuda:
             data, target = data.cuda(), target.cuda()
         data, target = Variable(data), Variable(target)
-        hyper_optimizer.zero_grad()
         output = model(data)
         loss = F.nll_loss(output, target)
         loss.backward()
-        hyper_optimizer.step()
+
+        # force the update norm to be small enough to prevent instability
+        clipped_lr = args.hyper_lr * clip_gradient(model.trainable_hyperparams, args.clip)
+
+        # this does parameter updates
+        for p in model.trainable_hyperparams:
+            p.data.add_(-clipped_lr, p.grad.data)
+
         if batch_idx % args.log_interval == 0:
             print('HyperTrain Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
                 epoch, batch_idx * len(data), len(dev_loader.dataset),
                 100. * batch_idx / len(train_loader), loss.data[0]))
-
-    print("Layer weights / keep_probs are: ")
-    print(model.trainable_hyperparams)
+    print("Keep_prob logits are: ")
+    print([p.data.cpu().numpy()[0] for p in model.trainable_hyperparams])
+    print("Actual layer weights / keep_probs are: ")
+    print([torch.sigmoid(p.data.cpu()).numpy()[0] for p in model.trainable_hyperparams])
 
 def test(epoch):
     model.eval()
